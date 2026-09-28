@@ -1,0 +1,39 @@
+thresholds:
+  block: 0.85
+  flag: 0.50
+  gray_zone_low: 0.35
+  single_component_max: FLAG
+
+protected_brands:
+  - google
+  - microsoft
+  - apple
+  - amazon
+  - paypal
+  - netflix
+
+feeds:
+  phishtank_path: data/feeds/phishtank.json
+  openphish_path: data/feeds/openphish.txt
+  urlhaus_path: data/feeds/urlhaus.csv
+  tranco_path: data/feeds/tranco_top1m.csv
+
+timeouts:
+  redirect_expansion_s: 5
+  imap_idle_timeout_s: 1740  # 29 minutes
+
+privacy:
+  body_retention_days: 30
+  redact_pii_in_logs: true
+
+models:
+  text_classifier: data/processed/text_classifier.onnx      # DistilBERT phishing
+  security_encoder: data/processed/securebert.onnx           # SecureBERT embeddings
+  tactic_classifier: data/processed/tactic_classifier.onnx   # multi-label tactics
+  url_model: data/processed/url_model.lgbm                   # LightGBM URL
+  fusion_model: data/processed/fusion_model.lgbm             # meta-classifier
+
+explainer:
+  max_reasons: 5               # top-N reasons in explanation
+  escalation_min_signals: 3    # require N+ weak signals to escalate
+  confidence_threshold: 0.6    # min tactic confidence to include in explanation

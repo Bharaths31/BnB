@@ -1,0 +1,8 @@
+# Dovecot master user configuration
+auth_master_user_separator = *
+
+passdb passdb-master {
+  driver = passwd-file
+  master = yes
+  passwd_file_path = /etc/dovecot/conf.d/master-users
+}

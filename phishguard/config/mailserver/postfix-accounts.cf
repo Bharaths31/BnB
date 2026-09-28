@@ -1,0 +1,4 @@
+victim@demo.local|{PLAIN}changeme
+attacker@demo.local|{PLAIN}changeme
+boss@demo.local|{PLAIN}changeme
+admin@demo.local|{PLAIN}changeme

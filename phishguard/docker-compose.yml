@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  mailserver:
+    image: mailserver/docker-mailserver:latest
+    container_name: phishguard-mailserver
+    hostname: mail
+    domainname: ${MAIL_DOMAIN}
+    env_file: .env
+    environment:
+      - PERMIT_DOCKER=network
+      - POSTFIX_INET_PROTOCOLS=ipv4
+      - ENABLE_SPAMASSASSIN=0
+      - ENABLE_CLAMAV=0
+      - ENABLE_AMAVIS=0
+      - ENABLE_FAIL2BAN=0
+      - ENABLE_POSTGREY=0
+      - LOG_LEVEL=debug
+    ports:
+      - "25:25"
+      - "143:143"
+      - "587:587"
+      - "993:993"
+    volumes:
+      - ./config/mailserver/:/tmp/docker-mailserver/
+      - mailserver-data:/var/mail
+      - mailserver-state:/var/mail-state
+      - mailserver-logs:/var/log/mail
+      - ./config/mailserver/dovecot-master.cf:/etc/dovecot/conf.d/90-master-user.conf:ro
+      - ./config/mailserver/master-users:/etc/dovecot/conf.d/master-users:ro
+    networks:
+      - phishguard-net
+
+  roundcube:
+    image: roundcube/roundcubemail:latest
+    container_name: phishguard-roundcube
+    environment:
+      - ROUNDCUBEMAIL_DEFAULT_HOST=imap://mailserver:143
+      - ROUNDCUBEMAIL_SMTP_SERVER=smtp://mailserver:587
+    ports:
+      - "8080:80"
+    volumes:
+      - roundcube-data:/var/www/html
+      - ./roundcube_plugin/phishguard:/var/www/html/plugins/phishguard
+    networks:
+      - phishguard-net
+    depends_on:
+      - mailserver
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: phishguard-backend
+    env_file: .env
+    environment:
+      - DOVECOT_HOST=mailserver
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./guard:/app/guard
+      - ./data:/app/data
+      - ./config:/app/config
+      - backend-data:/data
+    networks:
+      - phishguard-net
+    depends_on:
+      - mailserver
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: ../Dockerfile.dashboard
+    container_name: phishguard-dashboard
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./dashboard/src:/app/src
+    networks:
+      - phishguard-net
+
+networks:
+  phishguard-net:
+    driver: bridge
+
+volumes:
+  mailserver-data:
+  mailserver-state:
+  mailserver-logs:
+  roundcube-data:
+  backend-data:
