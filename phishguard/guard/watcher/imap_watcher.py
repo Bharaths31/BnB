@@ -5,7 +5,7 @@ from guard.store.events import save_email, save_verdict, get_last_uid, update_la
 from guard.store.audit import log_action
 from guard.parse.parser import parse_email
 from guard.models import Verdict
-from guard.fusion.fusion_engine import fusion_engine
+from guard.pipeline import get_pipeline_engine
 from guard.explainer.engine import explainer_engine
 import structlog
 import traceback
@@ -18,6 +18,7 @@ class MailboxWatcher:
         self.host = host
         self.client = None
         self.running = False
+        self.engine = get_pipeline_engine()
 
     async def run(self):
         self.running = True
@@ -70,24 +71,35 @@ class MailboxWatcher:
         parsed = parse_email(raw_email)
         await save_email(uid, self.user, parsed.subject, parsed.from_addr, parsed.raw_headers)
         
-        verdict = fusion_engine.evaluate(uid, parsed)
-        
+        verdict = self.engine.evaluate(uid, parsed)
+
         # Add explanation using ExplainerEngine
         verdict.explanation = explainer_engine.explain(verdict)
-            
+
         await save_verdict(verdict)
-        
+
         if verdict.level == "BLOCK":
             self.client.copy(uid, 'Quarantine')
             self.client.delete_messages(uid)
             self.client.expunge()
             await log_action(uid, "QUARANTINE", "Blocked by rules")
             logger.info("Quarantined message", uid=uid)
+        elif verdict.level == "REVIEW":
+            self.client.set_flags(uid, [b'$Suspicious'])
+            await log_action(uid, "REVIEW", "High risk / high uncertainty")
+            logger.info("Marked for review", uid=uid)
         elif verdict.level == "FLAG":
             self.client.set_flags(uid, [b'$Phishing'])
             await log_action(uid, "FLAG", "Flagged by rules")
             logger.info("Flagged message", uid=uid)
-            
+
+        # Post-verdict learning (profiles / graph). Off the hot path and policy-gated so
+        # clearly malicious mail cannot poison the history.
+        try:
+            await asyncio.to_thread(self.engine.update_after_verdict, parsed, verdict)
+        except Exception as exc:  # noqa: BLE001 - learning must never break processing
+            logger.warning("post_verdict_update_failed", uid=uid, error=str(exc))
+
         await update_last_uid(self.user, uid)
 
     def stop(self):

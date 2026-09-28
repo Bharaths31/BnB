@@ -967,3 +967,50 @@ reported**.
 | Campaign over-merging (legit bulk mail) | Medium | ≥2 independent similarity channels + benign-bulk test case + promotion thresholds |
 | Stub models make calibrated probabilities degenerate | Low | identity calibration fallback; calibration artifacts regenerated when real models land |
 | Graph/profile DB contention with watcher loop | Low | SQLite WAL mode, async store access, post-verdict updates off the hot path |
+
+---
+
+## 19. Implementation Status (living section)
+
+_Last updated: 2026-09-28._
+
+**Test suite:** `79 passed` (run with `cd phishguard && pytest tests/`).
+
+### Completed
+
+| Phase | Workstream | Files | Tests |
+|---|---|---|---|
+| 0 | **WS11 Evidence system** + component contract | `guard/evidence/*`, `guard/component.py` | `test_evidence.py`, `test_contracts.py` |
+| 0 | Shared model + parser extensions (recipients, timestamps, URL display text, capped attachment payloads, stdlib parser fallback) | `guard/models.py`, `guard/parse/parser.py` | `test_parser.py` |
+| 0 | FusionEngine component registry + latency + post-verdict hook | `guard/fusion/fusion_engine.py` | `test_fusion_registry.py` |
+| 1A | **WS1 Behavioral profiling** (robust median/MAD, SQLite persistence, poisoning prevention) | `guard/behavioral/*` | `test_behavioral.py` (10 scenarios) |
+| 1B | **WS3 HTML structural analysis** (static, contextualised, complexity-excluded) | `guard/html/*` | `test_html.py` (9 scenarios) |
+| 1C | **WS5 Static attachment analysis** (magic bytes, archives + bomb protection, Office/PDF/SVG) | `guard/attachment/*` | `test_attachment.py` (10 scenarios) |
+| 1D | **WS2 Cross-modal consistency** (12 features, brand/lookalike engine) | `guard/multimodal/*` | `test_multimodal.py` (8 scenarios) |
+| 2 | **WS10 Structured intent features** | `guard/nlp/intent.py` | `test_intent.py` (8 scenarios) |
+| 3 | **WS7 Fusion uncertainty + REVIEW + calibrated probability + ExplainEngine v2** | `guard/fusion/uncertainty.py`, `guard/fusion/meta_model.py`, `guard/explainer/engine.py` | `test_uncertainty.py` (6 scenarios) |
+| — | Pipeline assembly + watcher wiring | `guard/pipeline.py`, `guard/watcher/imap_watcher.py` | `test_pipeline_integration.py` |
+
+### Also fixed for local executability (deterministic fallbacks)
+
+- `guard/parse/ocr.py` — lazy RapidOCR/pyzbar loading (no import-time crash).
+- `guard/parse/normalizer.py` — built-in homoglyph fold when `confusables` is absent.
+- `guard/nlp/classifier.py` — lazy `optimum`/`transformers` import with the deterministic heuristic fallback preserved.
+- `guard/nlp/embedder.py` — deterministic feature-hash embedding (was `np.random`).
+
+### Remaining (next phases)
+
+- **WS4 + WS9** temporal relationship graph + campaign similarity (`guard/graph/*`).
+- **WS8** threshold calibration (`scripts/calibrate_thresholds.py`).
+- **WS13** campaign-aware dataset splitting + dataset bootstrap (`scripts/download_datasets.py`, `build_features.py`, `split_dataset.py`).
+- **WS6** adversarial transformation/evaluation (`guard/adversarial/*`).
+- **WS12** ablation/evaluation pipeline (`scripts/evaluate.py`, `scripts/ablation.py`, `docs/evaluation.md`).
+- Phase 6 presentation: dashboard EvidenceTable/CampaignList/temporal GraphView, graph/analysis/feedback API routes, Roundcube REVIEW banner.
+
+### Running tests locally
+
+```bash
+python3 -m venv --system-site-packages /tmp/opencode/pgvenv
+/tmp/opencode/pgvenv/bin/pip install pytest structlog pydantic-settings
+cd phishguard && /tmp/opencode/pgvenv/bin/python -m pytest tests/ -q
+```

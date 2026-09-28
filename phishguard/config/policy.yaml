@@ -37,3 +37,98 @@ explainer:
   max_reasons: 5               # top-N reasons in explanation
   escalation_min_signals: 3    # require N+ weak signals to escalate
   confidence_threshold: 0.6    # min tactic confidence to include in explanation
+
+# --- Extension settings (PhishGuard behavioral / multimodal / HTML / attachment / graph) ---
+behavioral:
+  update_policy: only_below_block   # always | only_below_block | confirmed_only
+  min_observations_before_anomaly: 5
+  anomaly_z_threshold: 3.5          # robust (MAD) z-score gate for "unusual"
+  relationship_interval_window: 20  # observations used for interval statistics
+
+html:
+  max_dom_nodes: 20000
+  max_html_bytes: 2097152
+  max_scripts: 200
+
+attachment:
+  max_depth: 3
+  max_files_per_archive: 500
+  max_total_uncompressed_bytes: 104857600   # 100 MB
+  max_compression_ratio: 100
+  max_attachment_bytes: 10485760            # 10 MB
+
+multimodal:
+  min_token_overlap: 0.15
+  use_embeddings: true
+
+graph:
+  campaign_promotion_threshold: 0.75
+  campaign_membership_min_channels: 2
+  similarity_threshold: 0.55
+  similarity_weights:
+    text: 0.30
+    url: 0.20
+    sender: 0.15
+    attachment: 0.10
+    subject: 0.10
+    embedding: 0.15
+
+fusion:
+  review_threshold: 0.70            # fallback; overridden by calibrated_policy.json
+  uncertainty_review_gate: 0.45
+
+calibration:
+  false_positive_cost: 1.0
+  false_negative_cost: 10.0
+  block_cost: 2.0
+  review_cost: 0.5
+  leakage_tolerance: 0
+
+# Brand dictionary for cross-modal consistency (exact legitimate domains vs lookalikes).
+brands:
+  microsoft:
+    display: Microsoft
+    legitimate_domains: [microsoft.com, live.com, outlook.com, office.com, microsoftonline.com]
+  google:
+    display: Google
+    legitimate_domains: [google.com, gmail.com, youtube.com, googlemail.com]
+  apple:
+    display: Apple
+    legitimate_domains: [apple.com, icloud.com]
+  amazon:
+    display: Amazon
+    legitimate_domains: [amazon.com, amazon.co.uk, amazon.de, aws.amazon.com]
+  paypal:
+    display: PayPal
+    legitimate_domains: [paypal.com, paypal.me]
+  netflix:
+    display: Netflix
+    legitimate_domains: [netflix.com]
+  dhl:
+    display: DHL
+    legitimate_domains: [dhl.com, dhl.de]
+  fedex:
+    display: FedEx
+    legitimate_domains: [fedex.com]
+  dropbox:
+    display: Dropbox
+    legitimate_domains: [dropbox.com]
+  linkedin:
+    display: LinkedIn
+    legitimate_domains: [linkedin.com, lnkd.in]
+
+# Legitimate third-party mailing / ESP domains (never treated as brand impersonation).
+legitimate_mailing_domains:
+  - sendgrid.net
+  - mailchimp.com
+  - list-manage.com
+  - constantcontact.com
+  - mailgun.org
+  - amazonses.com
+  - sendinblue.com
+  - hubspotemail.net
+  - salesforce.com
+  - exacttarget.com
+
+models:
+  calibration_policy: data/processed/calibrated_policy.json

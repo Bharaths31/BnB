@@ -18,3 +18,17 @@ pyzbar
 confusables
 datasketch
 python-louvain
+
+# --- Extension dependencies (classical / CPU-only) ---
+scikit-learn
+pandas
+pyarrow
+olefile
+pypdf
+idna
+Levenshtein
+xxhash
+
+# --- Test dependencies ---
+pytest
+pytest-asyncio
