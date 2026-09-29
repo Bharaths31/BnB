@@ -14,9 +14,11 @@ import socket
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from guard.tracking.credentials import database_name, resolve_uri
+
 
 def _default_uri() -> str:
-    return os.environ.get("MONGODB_URI", "").strip()
+    return resolve_uri()
 
 
 class SharedTracker:
@@ -53,7 +55,7 @@ class SharedTracker:
         if client is None:
             return None
         try:
-            return client["phishguard_testing"][name]
+            return client[database_name()][name]
         except Exception:
             return None
 

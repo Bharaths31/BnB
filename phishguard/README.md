@@ -996,80 +996,135 @@ Press **Ctrl+C** to finish — a footer is written and the file is closed cleanl
 
 ## Multi-tester & shared tracking database
 
-PhishGuard can be used by several people at once: each tester runs the stack (or you host one
-shared instance), logs into their **own** mail account, and every test result is recorded into
-**one shared database** so a coordinator can see who tested what.
+PhishGuard can be used by several people at once: each tester logs into their **own** mail
+account, and every test result and test message is stored in **one shared MongoDB** so a
+coordinator can see who did what.
 
-### 1. Give each tester their own account
+### 1. Provide the credentials (auto-detected)
 
-The demo ships with `victim@`, `boss@`, `admin@`, `attacker@` (`@demo.local`, password
-`changeme`). To add more accounts while the mailserver is running:
+On deployed systems, drop the Atlas credentials into **`phishguard/creds/atlas-credentials.env`**
+(that directory is git-ignored). PhishGuard auto-detects it:
+
+- **Compose** loads it into the `backend` container via an optional `env_file` entry, and
+- **Python** (`guard/tracking/credentials.py`) loads it automatically for local/script runs.
+
+Copy the template and fill it in:
 
 ```bash
-# Linux / macOS
-python3 scripts/add_tester.py alice@demo.local changeme
-python3 scripts/add_tester.py --from-file testers.txt
-```
-```powershell
-# Windows
-python scripts\add_tester.py alice@demo.local changeme
+cp creds/atlas-credentials.env.example creds/atlas-credentials.env
 ```
 
-`testers.txt` (one `email password` per line, password defaults to `changeme`):
+```dotenv
+# Option A — a full connection string
+MONGODB_URI=mongodb+srv://user:password@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority
+
+# Option B — a cluster URL plus user/password (the URI is built for you)
+MONGO_URL=mongodb+srv://cluster0.vnwyznr.mongodb.net/?appName=Cluster0
+MONGO_USER=your_atlas_db_user
+MONGO_PASSWORD=your_atlas_db_password
+
+MONGODB_DB=phishguard
+TESTER_ID=alice
+```
+
+> **Do you need the MongoDB Atlas "API key"?** Not the Admin API key — for application
+> connections you need the **connection string** (or the user + password + cluster URL). The
+> Admin API key is only for managing the cluster programmatically.
+
+Restart the backend to pick up the file:
+
+```bash
+docker compose up -d backend
+docker compose logs --tail=20 backend | grep -i mongo
+# [info] Shared MongoDB configured database=phishguard reachable=True
+```
+
+Check it from the API: <http://localhost:8000/api/mongo/status>.
+
+### 2. Create the collections (fresh cluster)
+
+```bash
+# inside the backend container (already has pymongo + the credentials env)
+docker compose exec backend python scripts/init_mongo.py
+```
+
+This creates/verifies `users`, `messages`, `test_events`, and `test_feedback` (plus indexes).
+
+### 3. Accounts (mailserver + MongoDB)
+
+`scripts/add_tester.py` creates the mailserver account **and** upserts the tester into the shared
+`users` collection:
+
+```bash
+python3 scripts/add_tester.py alice@demo.local changeme
+python3 scripts/add_tester.py --from-file testers.txt
+python3 scripts/add_tester.py alice@demo.local changeme --no-mongo   # mailserver only
+```
+
+`testers.txt` (one `email password` per line):
 
 ```
 alice@demo.local changeme
 bob@demo.local   changeme
 ```
 
-Alternatively, edit `config/mailserver/postfix-accounts.cf` and restart the mailserver with
-`docker compose up -d mailserver`.
+Users can also be registered directly through the API (`POST /api/users`).
 
-Each tester logs into Roundcube (<http://localhost:8080>) with their own full address (e.g.
-`alice@demo.local` / `changeme`). For remote testers, deploy the stack once on a reachable host
-and point everyone at that host's Roundcube/API URLs.
+### 4. What is stored in MongoDB
 
-### 2. Share one database (MongoDB Atlas free tier)
+| Collection | Contents |
+|---|---|
+| `users` | tester accounts: `email`, `password_hash` (PBKDF2), `salt`, `role`, `tester_id`, timestamps |
+| `messages` | Mongo-backed test messages: `from`, `to`, `subject`, `body`, `read`, `created_at` |
+| `test_events` | one document per analysed email: `tester`, `host`, `mailbox`, `uid`, `subject`, `sender`, `verdict`, `score`, `created_at` |
+| `test_feedback` | tester feedback records |
 
-> **Do you need to provide the MongoDB Atlas API key?** Yes — but for app connections it is the
-> **connection string**, not a separate API key. Atlas gives you a URI of the form
-> `mongodb+srv://<user>:<password>@<cluster>.xxxxx.mongodb.net/?retryWrites=true&w=majority`.
-> Put that string in `MONGODB_URI` in `.env`. (Atlas's *Admin* API key is only needed to manage
-> the cluster programmatically — you don't need it for this.)
+### 5. Send & receive (MongoDB as the mail base)
 
-Steps:
+A lightweight, MongoDB-backed messaging channel for testing — independent of SMTP/IMAP:
 
-1. Create a free **M0** cluster at <https://www.mongodb.com/cloud/atlas>.
-2. Create a database user and copy the connection string (*Atlas → Connect → Drivers*).
-3. In `phishguard/.env`, set:
+- **Webmail page:** <http://localhost:8000/mail> — enter your email, send a message, and read
+  your inbox/sent.
+- **API:**
 
-   ```dotenv
-   MONGODB_URI=mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority
-   TESTER_ID=alice          # who is this tester? (defaults to the host name if blank)
-   ```
+  | Method & path | Purpose |
+  |---|---|
+  | `GET /api/mongo/status` | enabled / reachable / collections |
+  | `POST /api/mongo/init` | create the collections |
+  | `GET /api/users` · `POST /api/users` | list / create testers |
+  | `POST /api/login` | check a tester's credentials |
+  | `POST /api/messages` | send a message (`sender`, `to`, `subject`, `body`) |
+  | `GET /api/messages?mailbox=…&folder=inbox\|sent` | read messages |
+  | `POST /api/messages/{id}/read` | mark a message read |
 
-4. Restart the backend: `docker compose restart backend`.
-
-Every verdict is then recorded into the shared `phishguard_testing.test_events` collection with
-the fields `tester`, `host`, `mailbox`, `uid`, `subject`, `sender`, `verdict`, `score`,
-`created_at`.
-
-View everyone's results:
+Example:
 
 ```bash
-python3 scripts/shared_report.py
-python3 scripts/shared_report.py --limit 50
+curl -s -X POST http://localhost:8000/api/messages \
+  -H 'Content-Type: application/json' \
+  -d '{"sender":"alice@demo.local","to":"bob@demo.local","subject":"hi","body":"hello"}'
+curl -s "http://localhost:8000/api/messages?mailbox=bob@demo.local&folder=inbox"
+```
+
+### 6. Shared reporting
+
+Every email analysed by the real IMAP pipeline is also recorded in `test_events`, so one report
+covers all testers:
+
+```bash
+python3 scripts/shared_report.py            # tester x verdict summary + latest events
 python3 scripts/shared_report.py --json
 ```
 
-### 3. Notes
+### 7. Notes & security
 
-- Shared tracking is **opt-in**: with `MONGODB_URI` empty (the default) it is a silent no-op and
-  the detection pipeline is unaffected.
-- `pymongo` is the only added dependency; if it isn't installed, tracking degrades to a no-op.
-- MongoDB Atlas is ideal when testers are on different machines. If everyone shares one host, a
-  shared SQLite file (or a shared Postgres/MySQL) is a simpler alternative — the tracking layer
-  is isolated in `guard/tracking/shared_store.py`, so swapping backends later is easy.
+- Shared storage is **opt-in**: with no credentials it is a silent no-op and detection is
+  unaffected; the mailbox/message routes then return HTTP 503.
+- **Rotate the Atlas password that was shared in plain text**, and keep `creds/` out of version
+  control (it already is).
+- `pymongo` is the only added dependency.
+- This Mongo channel is a **test convenience**; the SMTP/IMAP + Roundcube path remains the real
+  email path.
 
 ---
 

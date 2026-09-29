@@ -50,7 +50,10 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     container_name: phishguard-backend
-    env_file: .env
+    env_file:
+      - .env
+      - path: creds/atlas-credentials.env
+        required: false
     environment:
       - DOVECOT_HOST=mailserver
     ports:
