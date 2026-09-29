@@ -72,6 +72,7 @@ class MailboxWatcher:
         await save_email(uid, self.user, parsed.subject, parsed.from_addr, parsed.raw_headers)
         
         verdict = self.engine.evaluate(uid, parsed)
+        verdict.mailbox = self.user
 
         # Add explanation using ExplainerEngine
         verdict.explanation = explainer_engine.explain(verdict)
@@ -82,15 +83,15 @@ class MailboxWatcher:
             self.client.copy(uid, 'Quarantine')
             self.client.delete_messages(uid)
             self.client.expunge()
-            await log_action(uid, "QUARANTINE", "Blocked by rules")
+            await log_action(uid, "QUARANTINE", "Blocked by rules", self.user)
             logger.info("Quarantined message", uid=uid)
         elif verdict.level == "REVIEW":
             self.client.set_flags(uid, [b'$Suspicious'])
-            await log_action(uid, "REVIEW", "High risk / high uncertainty")
+            await log_action(uid, "REVIEW", "High risk / high uncertainty", self.user)
             logger.info("Marked for review", uid=uid)
         elif verdict.level == "FLAG":
             self.client.set_flags(uid, [b'$Phishing'])
-            await log_action(uid, "FLAG", "Flagged by rules")
+            await log_action(uid, "FLAG", "Flagged by rules", self.user)
             logger.info("Flagged message", uid=uid)
 
         # Post-verdict learning (profiles / graph). Off the hot path and policy-gated so

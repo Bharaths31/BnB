@@ -89,6 +89,7 @@ class ParsedEmail(BaseModel):
 
 class Verdict(BaseModel):
     uid: int
+    mailbox: str = ""
     score: float
     #: ALLOW | FLAG | REVIEW | BLOCK
     level: str = "ALLOW"

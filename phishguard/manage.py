@@ -16,44 +16,25 @@ def start_docker():
 
 
 def stop_docker():
-    print("Stopping Docker containers (this project)...")
-    run("docker compose down")
+    """Stop this project's containers but keep them (resume later with `start`)."""
+    print("Stopping this project's containers...")
+    run("docker compose stop")
+
+
+def stop_all():
+    """Stop and remove all containers created by *this* project only.
+
+    Scoped to the compose project (`docker compose down --remove-orphans`) so unrelated
+    containers on the machine are never touched. Data volumes are preserved (use
+    `docker compose down -v` manually if you want to wipe state).
+    """
+    print("Stopping and removing all containers created by this project...")
+    run("docker compose down --remove-orphans")
 
 
 def status_docker():
     print("Docker Compose status:")
     run("docker compose ps")
-
-
-def _running_container_ids():
-    """Return the IDs of every running Docker container (system-wide)."""
-    try:
-        out = subprocess.check_output(["docker", "ps", "-q"], text=True).strip()
-    except Exception as exc:  # docker missing or daemon not running
-        print(f"Could not query Docker: {exc}")
-        return []
-    return out.split()
-
-
-def stop_all():
-    """Stop ALL Docker containers that have been started.
-
-    1. Tear down this project's compose stack (containers + network).
-    2. Stop any other running containers on the machine.
-    """
-    print("Stopping the PhishGuard compose stack...")
-    try:
-        run("docker compose down --remove-orphans")
-    except subprocess.CalledProcessError:
-        print("docker compose down failed or the stack was not running; continuing.")
-
-    ids = _running_container_ids()
-    if not ids:
-        print("No running Docker containers remain.")
-        return
-    print(f"Stopping {len(ids)} remaining running container(s)...")
-    subprocess.check_call(["docker", "stop", *ids])
-    print("All running Docker containers stopped.")
 
 
 def setup_models():
@@ -81,11 +62,24 @@ def run_demo():
     run("bash scripts/setup_demo.sh")
 
 
+def verify_system():
+    print("Verifying that phishing is detected and blocked...")
+    run(f'"{sys.executable}" scripts/verify.py')
+
+
+def session_log():
+    print("Starting the independent Docker session logger (Ctrl+C to finish)...")
+    run(f'"{sys.executable}" scripts/session_logger.py --start')
+
+
 def main():
     parser = argparse.ArgumentParser(description="PhishGuard Manager")
     parser.add_argument(
         "action",
-        choices=["start", "stop", "stop_all", "status", "setup_models", "demo", "setup_all"],
+        choices=[
+            "start", "stop", "stop_all", "status", "setup_models", "demo",
+            "verify", "session_log", "setup_all",
+        ],
     )
     args = parser.parse_args()
 
@@ -105,6 +99,10 @@ def main():
         setup_models()
     elif args.action == "demo":
         run_demo()
+    elif args.action == "verify":
+        verify_system()
+    elif args.action == "session_log":
+        session_log()
     elif args.action == "setup_all":
         start_docker()
         setup_models()

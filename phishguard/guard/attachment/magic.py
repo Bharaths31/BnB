@@ -131,6 +131,8 @@ def _is_ooxml(data: bytes) -> Optional[str]:
 
 def detect(data: bytes) -> str:
     """Return the canonical sniffed type for ``data``."""
+    if isinstance(data, str):  # defensive: mailparser can hand back str payloads
+        data = data.encode("utf-8", "replace")
     if not data:
         return UNKNOWN
     for signature, kind in _SIGNATURES:

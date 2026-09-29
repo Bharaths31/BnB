@@ -48,8 +48,13 @@ def fetch_events(api: str) -> List[dict]:
         return []
 
 
-def max_uid(events: List[dict]) -> int:
-    return max((int(e.get("uid", 0) or 0) for e in events), default=0)
+def max_uid(events: List[dict], mailbox: str = "") -> int:
+    values = [
+        int(e.get("uid", 0) or 0)
+        for e in events
+        if not mailbox or (e.get("mailbox") or "") == mailbox
+    ]
+    return max(values, default=0)
 
 
 def send_demo(mail_type: str, smtp_host: str, smtp_port: int, recipient: str) -> None:
@@ -62,13 +67,20 @@ def send_demo(mail_type: str, smtp_host: str, smtp_port: int, recipient: str) ->
     ])
 
 
-def wait_for_subject(api: str, subject_substr: str, baseline_uid: int, timeout: float) -> Optional[dict]:
+def wait_for_subject(
+    api: str, subject_substr: str, baseline_uid: int, timeout: float, mailbox: str = ""
+) -> Optional[dict]:
     deadline = time.time() + timeout
     best: Optional[dict] = None
     while time.time() < deadline:
         for event in fetch_events(api):
             subject = (event.get("subject") or "").lower()
-            if subject_substr.lower() in subject and int(event.get("uid", 0) or 0) > baseline_uid:
+            in_mailbox = not mailbox or (event.get("mailbox") or "") == mailbox
+            if (
+                subject_substr.lower() in subject
+                and in_mailbox
+                and int(event.get("uid", 0) or 0) > baseline_uid
+            ):
                 if best is None or int(event["uid"]) >= int(best["uid"]):
                     best = event
         if best is not None:
@@ -129,8 +141,8 @@ def main(argv=None) -> int:
     print("      OK")
 
     # 2. Baseline ---------------------------------------------------------------
-    baseline = max_uid(fetch_events(args.api))
-    print(f"[2/4] Baseline UID .......... {baseline}")
+    baseline = max_uid(fetch_events(args.api), args.recipient)
+    print(f"[2/4] Baseline UID .......... {baseline} (mailbox {args.recipient})")
 
     # 3. Send -------------------------------------------------------------------
     if not args.skip_send:
@@ -147,8 +159,8 @@ def main(argv=None) -> int:
 
     # 4. Wait for verdicts ------------------------------------------------------
     print(f"[4/4] Waiting for verdicts .. up to {args.timeout:.0f}s")
-    phish = wait_for_subject(args.api, PHISH_SUBJECT, baseline, args.timeout)
-    legit = wait_for_subject(args.api, LEGIT_SUBJECT, baseline, args.timeout)
+    phish = wait_for_subject(args.api, PHISH_SUBJECT, baseline, args.timeout, args.recipient)
+    legit = wait_for_subject(args.api, LEGIT_SUBJECT, baseline, args.timeout, args.recipient)
 
     passed = True
 

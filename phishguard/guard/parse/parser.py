@@ -231,6 +231,10 @@ def _safe_get_content(part) -> str:
 def _append_attachment(parsed: ParsedEmail, filename: str, content_type: str, payload: bytes) -> None:
     if payload is None:
         payload = b""
+    elif isinstance(payload, str):  # mailparser may return str for text parts
+        payload = payload.encode("utf-8", "replace")
+    elif not isinstance(payload, (bytes, bytearray)):
+        payload = bytes(payload)
     has_macros = filename.lower().endswith((".docm", ".xlsm", ".pptm"))
     parsed.attachments.append(
         AttachmentInfo(

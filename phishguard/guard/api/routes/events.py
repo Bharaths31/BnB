@@ -7,6 +7,7 @@ router = APIRouter()
 
 class Event(BaseModel):
     uid: int
+    mailbox: str = ""
     subject: str
     sender: str
     received_at: str
@@ -25,6 +26,7 @@ async def get_events(limit: int = 50):
             reasons = json.loads(e['reasons_json'])
         res.append(Event(
             uid=e['uid'],
+            mailbox=e['mailbox'] or '',
             subject=e['subject'] or '',
             sender=e['sender'] or '',
             received_at=str(e['received_at']),

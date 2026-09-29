@@ -40,14 +40,53 @@ _BUILTIN_CONFUSABLES = {
 }
 
 
+#: Upper bound on how many characters we attempt to fold (bounds worst-case cost).
+_MAX_FOLD_CHARS = 200_000
+
+
 def _fold_confusables(text: str) -> str:
+    """Deterministically fold confusable characters, one pass, no combinatorial blow-up.
+
+    The modelling ``confusables.normalize`` helper enumerates **every** combination of
+    per-character confusables via ``itertools.product``, which grows exponentially and can
+    exhaust memory/CPU on real mail. Instead we pick a single best ASCII candidate per
+    character, which is deterministic, linear, and sufficient for normalisation.
+    """
+    if not text:
+        return text
+    if len(text) > _MAX_FOLD_CHARS:
+        text = text[:_MAX_FOLD_CHARS]
+    if text.isascii():
+        return text  # fast path — nothing to fold
+
     if _confusables is not None:
         try:
-            normalized = _confusables.normalize(text, prioritize_alpha=True)
-            if normalized:
-                return normalized[0]
+            lookup = _confusables.confusable_characters
+            non_normal = getattr(_confusables, "NON_NORMAL_ASCII_CHARS", set())
+            out = []
+            for char in text:
+                if char.isascii():
+                    out.append(char)
+                    continue
+                try:
+                    candidates = lookup(char)
+                except Exception:
+                    candidates = ()
+                pick = None
+                for candidate in candidates:
+                    if not isinstance(candidate, str) or not candidate or not candidate.isascii():
+                        continue
+                    if candidate in non_normal:
+                        continue
+                    if char.isalpha() and not candidate.isalpha():
+                        continue
+                    pick = candidate
+                    break
+                out.append(pick if pick is not None else char)
+            return "".join(out)
         except Exception:
             pass
+
     return "".join(_BUILTIN_CONFUSABLES.get(ch, ch) for ch in text)
 
 

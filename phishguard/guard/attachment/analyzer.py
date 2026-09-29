@@ -81,7 +81,13 @@ def analyze_attachment(
     ctx: Optional[AnalysisContext] = None,
 ) -> AttachmentResult:
     limits = limits or _limits()
-    payload = payload or b""
+    if payload is None:
+        payload = b""
+    elif isinstance(payload, str):
+        payload = payload.encode("utf-8", "replace")
+    elif not isinstance(payload, (bytes, bytearray)):
+        payload = bytes(payload)
+    payload = bytes(payload)
     magic_type = detect(payload)
     ext_mismatch = extension_mismatch(filename, magic_type)
     mime_mismatch = mime_magic_mismatch(content_type, magic_type)

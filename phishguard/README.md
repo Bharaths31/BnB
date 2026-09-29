@@ -26,9 +26,11 @@ and **immune to prompt injection** (no generative LLM is used anywhere).
 10. [Sending demo emails](#sending-demo-emails)
 11. [Running without Docker (local dev)](#running-without-docker-local-dev)
 12. [Running the test suite](#running-the-test-suite)
-13. [Troubleshooting](#troubleshooting)
-14. [Security notes](#security-notes)
-15. [Training / fine-tuning models](#training--fine-tuning-models)
+13. [Verifying that PhishGuard works](#verifying-that-phishguard-works)
+14. [Session logging (complete activity record)](#session-logging-complete-activity-record)
+15. [Troubleshooting](#troubleshooting)
+16. [Security notes](#security-notes)
+17. [Training / fine-tuning models](#training--fine-tuning-models)
 
 ---
 
@@ -373,17 +375,17 @@ docker compose start
 docker compose down
 ```
 
-### Stop everything (all Docker containers)
+### Stop all PhishGuard containers (this project only)
 
-Use this when you want to shut down **every** container that has been started, not just
-PhishGuard's.
+These commands affect **only** the containers created by this project (`phishguard`); unrelated
+containers on your machine are never touched.
 
 **Preferred method — cross-platform `manage.py` action:**
 
 ```bash
 # Linux / macOS
 cd BnB/phishguard
-python3 manage.py stop_all
+python3 manage.py stop_all          # stop + remove all PhishGuard containers
 ```
 
 ```powershell
@@ -392,35 +394,30 @@ cd BnB\phishguard
 python manage.py stop_all
 ```
 
-`stop_all` first tears down the PhishGuard stack (`docker compose down --remove-orphans`), then
-runs `docker stop` on every other running container on the machine.
+`stop_all` runs `docker compose down --remove-orphans`, which stops and removes every container
+in the `phishguard` compose project (plus any orphaned ones) while **preserving the data
+volumes**. For a softer stop that keeps the containers around, use `python manage.py stop`
+(`docker compose stop`).
 
-**Raw one-liners (if you prefer not to use `manage.py`):**
+**Raw equivalents (if you prefer not to use `manage.py`):**
 
 ```bash
 # Linux / macOS
 cd BnB/phishguard
-docker compose down --remove-orphans     # stop + remove this project's containers
-docker stop $(docker ps -q)              # stop every other running container
+docker compose stop                    # stop all PhishGuard containers, keep them
+docker compose down --remove-orphans   # stop + remove all PhishGuard containers
 ```
 
 ```powershell
-# Windows PowerShell
+# Windows
 cd BnB\phishguard
+docker compose stop
 docker compose down --remove-orphans
-docker ps -q | ForEach-Object { docker stop $_ }
 ```
 
-```bat
-:: Windows Command Prompt (cmd.exe)
-cd BnB\phishguard
-docker compose down --remove-orphans
-for /f "tokens=*" %i in ('docker ps -q') do docker stop %i
-```
-
-> **Warning:** `docker stop $(docker ps -q)` / the loop above stops **all** running containers
-> system-wide, including any unrelated to PhishGuard. To remove the PhishGuard volumes and
-> images too (destroys mail + database state), use `docker compose down -v --remove-orphans`.
+> These are **project-scoped**: `docker compose` only acts on the services defined in
+> `docker-compose.yml`. To also wipe the mail/database state, add `-v`:
+> `docker compose down -v --remove-orphans`.
 
 ### Full reset (wipes mail + database state)
 
@@ -464,11 +461,13 @@ Works on both platforms (run from `phishguard/`):
 
 ```bash
 python manage.py start          # docker compose up -d
-python manage.py stop           # docker compose down (this project)
-python manage.py stop_all       # this project + EVERY running container
+python manage.py stop           # docker compose stop (this project, keep containers)
+python manage.py stop_all       # docker compose down --remove-orphans (this project only)
 python manage.py status         # docker compose ps
 python manage.py setup_models   # export ONNX models inside the backend container
 python manage.py demo           # send demo emails (Linux/macOS or Git Bash)
+python manage.py verify         # end-to-end verification (see below)
+python manage.py session_log    # start the independent session logger
 python manage.py setup_all      # start + models + demo
 ```
 
@@ -694,7 +693,274 @@ pytest tests/test_behavioral.py -v
 
 ---
 
-## Troubleshooting
+## Verifying that PhishGuard works
+
+There are two ways to confirm the system actually detects and blocks phishing: the automated
+verifier (recommended) and a manual walk-through.
+
+### Automated — `scripts/verify.py`
+
+Run from the `phishguard/` directory with the stack up:
+
+```bash
+# Linux / macOS
+python3 scripts/verify.py
+```
+
+```powershell
+# Windows
+python scripts\verify.py
+```
+
+Or via the wrapper: `python manage.py verify`.
+
+The script:
+
+1. checks the backend health endpoint;
+2. records the current maximum email UID for the target mailbox (so old events can't cause a
+   false pass);
+3. sends one **phishing** and one **legitimate** demo email;
+4. waits for both verdicts to appear in the API;
+5. asserts the phishing message is `FLAG`/`REVIEW`/`BLOCK` and the legitimate one is `ALLOW`;
+6. reports the `Quarantine` IMAP folder count (best effort).
+
+Expected result:
+
+```
+  PHISH  : verdict=REVIEW score=0.95  ->  PASS
+  LEGIT  : verdict=ALLOW  score=0.20  ->  PASS
+
+  Quarantine folder contains 3 message(s)
+
+RESULT: PASS — phishing is detected, legitimate mail is allowed
+```
+
+The exit code is `0` on success and `1` on failure, so it can gate CI.
+
+> **Levels:** PhishGuard uses `ALLOW` / `FLAG` / `REVIEW` / `BLOCK`. A phishing message may be
+> blocked (`BLOCK`), flagged (`FLAG`), or sent to `REVIEW` when the risk is high but components
+> disagree. The verifier counts `FLAG`, `REVIEW`, and `BLOCK` as "detected".
+
+Useful options:
+
+```bash
+python3 scripts/verify.py --timeout 90      # wait longer for slow mail delivery
+python3 scripts/verify.py --skip-send       # only re-check existing events
+python3 scripts/verify.py --recipient boss@demo.local
+```
+
+### Manual testing (step by step)
+
+Use this to watch the system work by hand. Keep **two terminals** open in the `phishguard/`
+directory: one to send mail, one to follow the backend.
+
+**Terminal 1 — follow the backend log:**
+
+```bash
+# Linux / macOS
+docker compose logs -f backend
+```
+```powershell
+# Windows
+docker compose logs -f backend
+```
+
+#### Step 1 — Confirm the stack is healthy
+
+```bash
+docker compose ps
+```
+
+```bash
+curl -s http://localhost:8000/health
+```
+```powershell
+# Windows
+Invoke-RestMethod http://localhost:8000/health
+```
+
+Expect all four services `Up` (mailserver `(healthy)`) and `{"status":"ok"}`.
+
+#### Step 2 — Send one test message at a time
+
+Each demo type exercises a different capability. Send **one at a time** so you can watch the
+result in Terminal 1.
+
+| `--type` | What it represents | Expected verdict |
+|---|---|---|
+| `phish` | obvious credential phishing with a bad link | `FLAG` / `REVIEW` / `BLOCK` |
+| `ceo_fraud` | business email compromise (urgent wire transfer) | `FLAG` / `REVIEW` / `BLOCK` |
+| `homoglyph` | lookalike domain (`gọogle.com`) evading filters | `FLAG` / `REVIEW` / `BLOCK` |
+| `qr` | QR / "scan this" lure | `FLAG` / `REVIEW` (weak cases may be `ALLOW`) |
+| `legit` | ordinary internal update (control) | `ALLOW` |
+
+```bash
+# Linux / macOS — pick one
+python3 scripts/send_demo_mail.py --type phish     --smtp-host localhost
+python3 scripts/send_demo_mail.py --type ceo_fraud --smtp-host localhost
+python3 scripts/send_demo_mail.py --type homoglyph --smtp-host localhost
+python3 scripts/send_demo_mail.py --type qr        --smtp-host localhost
+python3 scripts/send_demo_mail.py --type legit     --smtp-host localhost
+```
+```powershell
+# Windows (pick one)
+python scripts\send_demo_mail.py --type phish --smtp-host localhost
+python scripts\send_demo_mail.py --type legit --smtp-host localhost
+```
+
+#### Step 3 — Watch the backend process it
+
+In Terminal 1 you should see, within a few seconds of sending:
+
+```
+[info] Processing message uid=N
+[info] Quarantined message uid=N      # when the verdict is BLOCK
+[info] Marked for review uid=N        # when the verdict is REVIEW
+[info] Flagged message uid=N          # when the verdict is FLAG
+```
+
+#### Step 4 — Verify through the API
+
+```bash
+curl -s "http://localhost:8000/api/events?limit=5" | python3 -m json.tool
+```
+```powershell
+# Windows
+Invoke-RestMethod "http://localhost:8000/api/events?limit=5" | ConvertTo-Json -Depth 5
+```
+
+Read the newest entry:
+
+| Field | Meaning |
+|---|---|
+| `mailbox` | which mailbox processed the message |
+| `subject` / `sender` | the message identity |
+| `verdict` | `ALLOW` / `FLAG` / `REVIEW` / `BLOCK` |
+| `score` | 0–1 threat score |
+| `reasons` | tactic reasons, e.g. `High urgency confidence: 0.90` |
+
+#### Step 5 — Verify on the dashboard
+
+Open <http://localhost:3000>. The message appears as a card, colour-coded by `verdict`, with a
+score bar.
+
+#### Step 6 — Verify in Roundcube (the actual mailbox)
+
+Open <http://localhost:8080> and log in as `victim@demo.local` / `changeme`.
+
+- `BLOCK` → the message is in the **Quarantine** folder in the left sidebar.
+- `FLAG` / `REVIEW` → the message stays in the **INBOX**, typically with a PhishGuard warning
+  banner and a `$Phishing` / `$Suspicious` mark.
+- `legit` → stays in the INBOX with no warning.
+
+#### Step 7 — Verify the audit trail and the explanation
+
+The system stores the verdict, the action taken, and the generated explanation in SQLite. These
+one-line commands work in bash and PowerShell:
+
+```bash
+# Recent verdicts
+docker compose exec backend python3 -c "import sqlite3;db=sqlite3.connect('/data/phishguard.db');db.row_factory=sqlite3.Row;[print(dict(r)) for r in db.execute('SELECT mailbox,uid,verdict,score FROM verdicts ORDER BY created_at DESC LIMIT 5')]"
+```
+```bash
+# Recent audit actions (QUARANTINE / FLAG / REVIEW)
+docker compose exec backend python3 -c "import sqlite3;db=sqlite3.connect('/data/phishguard.db');db.row_factory=sqlite3.Row;[print(dict(r)) for r in db.execute('SELECT mailbox,uid,action,reason FROM audit_log ORDER BY id DESC LIMIT 5')]"
+```
+```bash
+# The deterministic explanation for the most recent message
+docker compose exec backend python3 -c "import sqlite3;db=sqlite3.connect('/data/phishguard.db');r=db.execute('SELECT explanation FROM verdicts ORDER BY created_at DESC LIMIT 1').fetchone();print((r[0] or '')[:800] if r else 'none')"
+```
+
+#### Step 8 — Verify behavioral profiling (optional)
+
+Profiles are persisted to SQLite. Send `--type legit` a few times and watch `total_messages` grow:
+
+```bash
+docker compose exec backend python3 -c "import sqlite3,json;db=sqlite3.connect('/app/data/profiles.db');[print(r[0],'msgs=',r[1],'domains=',list(json.loads(r[2])['sender_domains'])[:3]) for r in db.execute('SELECT sender,total_messages,profile_json FROM sender_profiles LIMIT 5')]"
+```
+
+Poisoning prevention: by default (`behavioral.update_policy: only_below_block` in
+`config/policy.yaml`) profiles are **not** updated for `BLOCK`-level mail. Change that value to
+`always`, `only_below_block`, or `confirmed_only` to test different policies.
+
+#### Step 9 — Confirm the deterministic fallback (optional)
+
+With no ONNX model exported, Terminal 1 shows `ONNX model not found, using deterministic
+fallback` and the system still produces verdicts — demonstrating that the pipeline never depends
+on an optional model. Export the model with `python3 manage.py setup_models` and restart the
+backend to compare.
+
+#### Resetting between tests (optional)
+
+Delete a test message in Roundcube, or start from a clean slate:
+
+```bash
+docker compose down -v
+docker compose up -d --build
+```
+
+**Pass criteria:** phishing / BEC / homoglyph types get `FLAG`/`REVIEW`/`BLOCK`; `legit` gets
+`ALLOW`; a `BLOCK`ed message appears in `Quarantine`; the audit log records the action; the
+stored explanation is non-empty.
+
+> If a message never appears: confirm the mailserver is `healthy` (`docker compose ps`), that the
+> backend logged `Watchers started`, and that you sent to a watched mailbox (`victim@`, `boss@`,
+> `admin@`). See [Troubleshooting](#troubleshooting).
+
+---
+
+## Session logging (complete activity record)
+
+`scripts/session_logger.py` is an **independent** logger that records everything that happens
+during a Docker session into a single timestamped file — separate from, and in addition to, the
+application's own logs.
+
+It captures:
+
+- **all container logs** from the beginning of the containers (`--tail all` dumps the full
+  history, then follows live output) across `backend`, `mailserver`, `roundcube`, `dashboard`;
+- **Docker lifecycle events** (create / start / stop / die / restart) for this compose project;
+- a header (start time, host, project) and a footer (`docker compose ps` at start and end).
+
+**The file is named by day, month, year and time:**
+
+```
+logs/phishguard_session_DD-MM-YYYY_HH-MM-SS.log
+# example:
+logs/phishguard_session_29-09-2026_11-31-18.log
+```
+
+Usage (run from the `phishguard/` directory):
+
+```bash
+# Linux / macOS — start the stack and record the whole session until Ctrl+C
+python3 scripts/session_logger.py --start
+
+# record an already-running session
+python3 scripts/session_logger.py
+
+# dump existing logs and exit (no follow)
+python3 scripts/session_logger.py --no-follow
+
+# record and tear the stack down when you stop (true start→finish)
+python3 scripts/session_logger.py --start --down-on-exit
+
+# limit to specific services
+python3 scripts/session_logger.py --services backend mailserver
+```
+
+```powershell
+# Windows
+python scripts\session_logger.py --start
+python scripts\session_logger.py --no-follow
+```
+
+Or via the wrapper: `python manage.py session_log`.
+
+Press **Ctrl+C** to finish — a footer is written and the file is closed cleanly.
+
+> `logs/` is git-ignored, so session logs are never committed. If your compose project name is
+> not the directory name, pass `--project <name>` for the events filter.
 
 **`docker compose` says `env file .env not found`**
 You skipped step 2. Create it: `cp .env.example .env` (Linux) / `Copy-Item .env.example .env` (Windows).
