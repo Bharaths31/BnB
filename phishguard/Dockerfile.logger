@@ -1,0 +1,12 @@
+FROM alpine:latest
+
+# Docker client (talks to the host socket mounted at runtime) + tini (reaps the
+# background log-follower children).
+RUN apk add --no-cache docker-cli tini
+
+RUN mkdir -p /scripts
+COPY scripts/docker_logger.sh /scripts/
+RUN chmod +x /scripts/docker_logger.sh
+
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["/scripts/docker_logger.sh"]

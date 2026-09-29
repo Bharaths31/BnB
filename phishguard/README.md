@@ -28,9 +28,10 @@ and **immune to prompt injection** (no generative LLM is used anywhere).
 12. [Running the test suite](#running-the-test-suite)
 13. [Verifying that PhishGuard works](#verifying-that-phishguard-works)
 14. [Session logging (complete activity record)](#session-logging-complete-activity-record)
-15. [Troubleshooting](#troubleshooting)
-16. [Security notes](#security-notes)
-17. [Training / fine-tuning models](#training--fine-tuning-models)
+15. [Multi-tester & shared tracking database](#multi-tester--shared-tracking-database)
+16. [Troubleshooting](#troubleshooting)
+17. [Security notes](#security-notes)
+18. [Training / fine-tuning models](#training--fine-tuning-models)
 
 ---
 
@@ -42,6 +43,7 @@ and **immune to prompt injection** (no generative LLM is used anywhere).
 | `roundcube` | `roundcube/roundcubemail` | Webmail UI + PhishGuard banner plugin | 8080 |
 | `backend` | Python 3.11 + Uvicorn (FastAPI) | IMAP IDLE watcher + detection pipeline + API | 8000 |
 | `dashboard` | Node 20 + Vite/React | Live verdict dashboard | 3000 |
+| `logger` | alpine + docker-cli (autostart sidecar) | streams **all** container logs + lifecycle events into `logs/phishguard_session_<timestamp>.log` | — |
 
 **Detection pipeline** (`guard/`):
 
@@ -911,9 +913,37 @@ stored explanation is non-empty.
 
 ## Session logging (complete activity record)
 
+### Automatic (starts with the stack)
+
+A `logger` sidecar service is included in `docker-compose.yml`, so **logging starts
+automatically whenever you bring the stack up** — no extra command needed:
+
+```bash
+docker compose up -d
+```
+
+The logger container mounts the Docker socket (read-only) and the local `logs/` directory, then
+streams every project container's logs (full history + live) and Docker lifecycle events into a
+timestamped file. Verify it is running:
+
+```bash
+docker compose ps logger
+ls -t logs/ | head            # newest phishguard_session_*.log
+```
+
+It writes to the same files, in the same format, as the on-demand script below. It is stopped
+and removed by `docker compose down` / `manage.py stop_all` like every other service.
+
+> The logger writes files as the container's root user; `logs/` is git-ignored. Because it needs
+> read access to the Docker daemon it mounts `/var/run/docker.sock` read-only — acceptable for a
+> local dev/demo tool, but don't expose that to untrusted workloads.
+
+### On-demand (host-side script)
+
 `scripts/session_logger.py` is an **independent** logger that records everything that happens
 during a Docker session into a single timestamped file — separate from, and in addition to, the
-application's own logs.
+application's own logs. It is still available if you prefer to start/stop logging yourself
+instead of using the automatic sidecar.
 
 It captures:
 
@@ -961,6 +991,89 @@ Press **Ctrl+C** to finish — a footer is written and the file is closed cleanl
 
 > `logs/` is git-ignored, so session logs are never committed. If your compose project name is
 > not the directory name, pass `--project <name>` for the events filter.
+
+---
+
+## Multi-tester & shared tracking database
+
+PhishGuard can be used by several people at once: each tester runs the stack (or you host one
+shared instance), logs into their **own** mail account, and every test result is recorded into
+**one shared database** so a coordinator can see who tested what.
+
+### 1. Give each tester their own account
+
+The demo ships with `victim@`, `boss@`, `admin@`, `attacker@` (`@demo.local`, password
+`changeme`). To add more accounts while the mailserver is running:
+
+```bash
+# Linux / macOS
+python3 scripts/add_tester.py alice@demo.local changeme
+python3 scripts/add_tester.py --from-file testers.txt
+```
+```powershell
+# Windows
+python scripts\add_tester.py alice@demo.local changeme
+```
+
+`testers.txt` (one `email password` per line, password defaults to `changeme`):
+
+```
+alice@demo.local changeme
+bob@demo.local   changeme
+```
+
+Alternatively, edit `config/mailserver/postfix-accounts.cf` and restart the mailserver with
+`docker compose up -d mailserver`.
+
+Each tester logs into Roundcube (<http://localhost:8080>) with their own full address (e.g.
+`alice@demo.local` / `changeme`). For remote testers, deploy the stack once on a reachable host
+and point everyone at that host's Roundcube/API URLs.
+
+### 2. Share one database (MongoDB Atlas free tier)
+
+> **Do you need to provide the MongoDB Atlas API key?** Yes — but for app connections it is the
+> **connection string**, not a separate API key. Atlas gives you a URI of the form
+> `mongodb+srv://<user>:<password>@<cluster>.xxxxx.mongodb.net/?retryWrites=true&w=majority`.
+> Put that string in `MONGODB_URI` in `.env`. (Atlas's *Admin* API key is only needed to manage
+> the cluster programmatically — you don't need it for this.)
+
+Steps:
+
+1. Create a free **M0** cluster at <https://www.mongodb.com/cloud/atlas>.
+2. Create a database user and copy the connection string (*Atlas → Connect → Drivers*).
+3. In `phishguard/.env`, set:
+
+   ```dotenv
+   MONGODB_URI=mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority
+   TESTER_ID=alice          # who is this tester? (defaults to the host name if blank)
+   ```
+
+4. Restart the backend: `docker compose restart backend`.
+
+Every verdict is then recorded into the shared `phishguard_testing.test_events` collection with
+the fields `tester`, `host`, `mailbox`, `uid`, `subject`, `sender`, `verdict`, `score`,
+`created_at`.
+
+View everyone's results:
+
+```bash
+python3 scripts/shared_report.py
+python3 scripts/shared_report.py --limit 50
+python3 scripts/shared_report.py --json
+```
+
+### 3. Notes
+
+- Shared tracking is **opt-in**: with `MONGODB_URI` empty (the default) it is a silent no-op and
+  the detection pipeline is unaffected.
+- `pymongo` is the only added dependency; if it isn't installed, tracking degrades to a no-op.
+- MongoDB Atlas is ideal when testers are on different machines. If everyone shares one host, a
+  shared SQLite file (or a shared Postgres/MySQL) is a simpler alternative — the tracking layer
+  is isolated in `guard/tracking/shared_store.py`, so swapping backends later is easy.
+
+---
+
+## Troubleshooting
 
 **`docker compose` says `env file .env not found`**
 You skipped step 2. Create it: `cp .env.example .env` (Linux) / `Copy-Item .env.example .env` (Windows).

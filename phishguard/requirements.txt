@@ -19,6 +19,9 @@ confusables
 datasketch
 python-louvain
 
+# --- Optional shared multi-tester tracking (MongoDB Atlas) ---
+pymongo
+
 # --- Extension dependencies (classical / CPU-only) ---
 scikit-learn
 pandas

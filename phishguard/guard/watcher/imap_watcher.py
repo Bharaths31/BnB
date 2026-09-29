@@ -7,6 +7,7 @@ from guard.parse.parser import parse_email
 from guard.models import Verdict
 from guard.pipeline import get_pipeline_engine
 from guard.explainer.engine import explainer_engine
+from guard.tracking.shared_store import shared_tracker
 import structlog
 import traceback
 
@@ -78,6 +79,14 @@ class MailboxWatcher:
         verdict.explanation = explainer_engine.explain(verdict)
 
         await save_verdict(verdict)
+
+        # Optional shared multi-tester tracking (silent no-op unless MONGODB_URI is set).
+        try:
+            await asyncio.to_thread(
+                shared_tracker.record_verdict, verdict, self.user, parsed.subject, parsed.from_addr
+            )
+        except Exception:
+            pass
 
         if verdict.level == "BLOCK":
             self.client.copy(uid, 'Quarantine')
