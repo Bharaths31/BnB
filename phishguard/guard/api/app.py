@@ -1,4 +1,5 @@
 import asyncio
+import os
 import threading
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,14 +29,41 @@ app.include_router(mailbox.page_router, tags=["pages"])
 
 watchers = []
 
+def _discover_mailboxes():
+    """Watched mailboxes: WATCH_MAILBOXES env, else the mailserver account file, else demo."""
+    override = os.environ.get("WATCH_MAILBOXES", "").strip()
+    if override:
+        return [m.strip() for m in override.split(",") if m.strip()]
+
+    candidates = [
+        os.path.join(os.environ.get("MAILSERVER_CONFIG_DIR", "/app/config/mailserver"),
+                     "postfix-accounts.cf"),
+        "config/mailserver/postfix-accounts.cf",
+    ]
+    for path in candidates:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                mailboxes = []
+                for line in handle:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "|" not in line:
+                        continue
+                    email = line.split("|", 1)[0].strip()
+                    if email:
+                        mailboxes.append(email)
+                if mailboxes:
+                    return mailboxes
+        except FileNotFoundError:
+            continue
+    return ["victim@demo.local", "boss@demo.local", "admin@demo.local"]
+
+
 async def start_watchers():
-    users = ["victim@demo.local", "boss@demo.local", "admin@demo.local"]
+    users = _discover_mailboxes()
+    host = os.environ.get("DOVECOT_HOST", "mailserver")
+    logger.info("Starting watchers", mailboxes=users)
     for u in users:
-        watcher = MailboxWatcher(u, settings.dovecot_master_user) # Wait, host is settings.dovecot_master_user? No.
-        # Imap host should be mailserver
-        import os
-        host = os.environ.get("DOVECOT_HOST", "mailserver")
-        watcher.host = host
+        watcher = MailboxWatcher(u, host)
         watchers.append(watcher)
         asyncio.create_task(watcher.run())
 

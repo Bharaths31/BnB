@@ -2,3 +2,6 @@ victim@demo.local|{PLAIN}changeme
 attacker@demo.local|{PLAIN}changeme
 boss@demo.local|{PLAIN}changeme
 admin@demo.local|{PLAIN}changeme
+attacker1@bnb.online|{SHA512-CRYPT}$6$JhNXrU31/Z5vWu6f$EWxfGbsORb710dqpC0nSE.n.U9NmBMaiqKVpxb2is3LeWGD5eTqwAQG.1dfiE0xME0cq82JoHe8GlTVY4PpKJ.
+victim1@bnb.online|{SHA512-CRYPT}$6$Cxtr.lLSAl4FN2ae$8SPWI5VDqGtyunflX8byLBvY7MJ.AnsIn1FkoEP/3EQ6VwCQnCeYq5T5tqRSJaT1bH0kJTIjxyacMdi4OJezk0
+boss1@bnb.com|{SHA512-CRYPT}$6$s/DvlEspjP9dv85L$DL09L/1ydnBUxDsc4yLYRkDDGGASpLLXSC/Iz0MmDEZX/B2kDkHBb.GnMXHeYLQVBOXRe4e8LvQ4ZoMETHGp70
