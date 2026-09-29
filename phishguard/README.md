@@ -272,6 +272,69 @@ python scripts\send_demo_mail.py --type all --smtp-host localhost
 Demo mailboxes (password `changeme`): `victim@demo.local`, `attacker@demo.local`,
 `boss@demo.local`, `admin@demo.local`.
 
+### Logging into Roundcube (webmail)
+
+Roundcube runs in its own container and talks to the mailserver over IMAP. You log in with a
+**full email address** (not just the username).
+
+1. Confirm the stack is up and the mailserver is healthy:
+
+   ```bash
+   # Linux
+   docker compose ps
+   docker compose logs --tail=20 mailserver
+   ```
+   ```powershell
+   # Windows
+   docker compose ps
+   docker compose logs --tail=20 mailserver
+   ```
+
+2. Open <http://localhost:8080> in your browser.
+
+3. Fill in the login form:
+
+   | Field | Value |
+   |---|---|
+   | **Username** | `victim@demo.local` *(use the full address — the `@demo.local` part is required)* |
+   | **Password** | `changeme` |
+   | **Server** | leave the prefilled value (`mailserver`) — do **not** change it to `localhost` |
+
+   > The server name comes from `ROUNDCUBEMAIL_DEFAULT_HOST=imap://mailserver:143` in
+   > `docker-compose.yml`. Inside the Docker network the mailserver is reachable as `mailserver`,
+   > not `localhost`.
+
+4. Click **Login**. You should land in the INBOX.
+
+5. What to expect:
+
+   - A **Quarantine** folder is created automatically the first time the backend blocks a message.
+   - Blocked mail is moved to **Quarantine**; flagged mail stays in the INBOX with a `$Phishing`
+     keyword and a warning banner from the PhishGuard plugin.
+   - The detection watchers start automatically when the **backend** starts, for
+     `victim@demo.local`, `boss@demo.local`, and `admin@demo.local`.
+
+6. Send a test message and watch it happen (see [Sending demo emails](#sending-demo-emails)):
+
+   ```bash
+   # Linux
+   python3 scripts/send_demo_mail.py --type phish --smtp-host localhost
+   ```
+   ```powershell
+   # Windows
+   python scripts\send_demo_mail.py --type phish --smtp-host localhost
+   ```
+
+7. If login fails:
+
+   - **"Login failed" / cannot connect to IMAP** → the mailserver is still starting. Wait for
+     `(healthy)` in `docker compose ps` and retry.
+   - **Wrong username format** → always use the full address (`victim@demo.local`).
+   - **Account missing** → the accounts live in `config/mailserver/postfix-accounts.cf`
+     (`victim`, `attacker`, `boss`, `admin`, all `@demo.local`, password `changeme`).
+   - **Blank page / 502** → check `docker compose logs -f roundcube`.
+   - **Stale session** → clear cookies for `localhost:8080`, or open an incognito window.
+
 ---
 
 ## Everyday operations
@@ -310,6 +373,55 @@ docker compose start
 docker compose down
 ```
 
+### Stop everything (all Docker containers)
+
+Use this when you want to shut down **every** container that has been started, not just
+PhishGuard's.
+
+**Preferred method — cross-platform `manage.py` action:**
+
+```bash
+# Linux / macOS
+cd BnB/phishguard
+python3 manage.py stop_all
+```
+
+```powershell
+# Windows
+cd BnB\phishguard
+python manage.py stop_all
+```
+
+`stop_all` first tears down the PhishGuard stack (`docker compose down --remove-orphans`), then
+runs `docker stop` on every other running container on the machine.
+
+**Raw one-liners (if you prefer not to use `manage.py`):**
+
+```bash
+# Linux / macOS
+cd BnB/phishguard
+docker compose down --remove-orphans     # stop + remove this project's containers
+docker stop $(docker ps -q)              # stop every other running container
+```
+
+```powershell
+# Windows PowerShell
+cd BnB\phishguard
+docker compose down --remove-orphans
+docker ps -q | ForEach-Object { docker stop $_ }
+```
+
+```bat
+:: Windows Command Prompt (cmd.exe)
+cd BnB\phishguard
+docker compose down --remove-orphans
+for /f "tokens=*" %i in ('docker ps -q') do docker stop %i
+```
+
+> **Warning:** `docker stop $(docker ps -q)` / the loop above stops **all** running containers
+> system-wide, including any unrelated to PhishGuard. To remove the PhishGuard volumes and
+> images too (destroys mail + database state), use `docker compose down -v --remove-orphans`.
+
 ### Full reset (wipes mail + database state)
 
 ```bash
@@ -341,13 +453,20 @@ docker compose build --no-cache backend dashboard
 docker compose up -d
 ```
 
+> **Dashboard note:** only `dashboard/src` is bind-mounted into the container. So editing React
+> components hot-reloads, but changes to `package.json`, `postcss.config.js`, `tailwind.config.js`,
+> or `vite.config.js` require rebuilding the dashboard image
+> (`docker compose build dashboard && docker compose up -d dashboard`).
+
 ### `manage.py` convenience wrapper
 
 Works on both platforms (run from `phishguard/`):
 
 ```bash
 python manage.py start          # docker compose up -d
-python manage.py stop           # docker compose down
+python manage.py stop           # docker compose down (this project)
+python manage.py stop_all       # this project + EVERY running container
+python manage.py status         # docker compose ps
 python manage.py setup_models   # export ONNX models inside the backend container
 python manage.py demo           # send demo emails (Linux/macOS or Git Bash)
 python manage.py setup_all      # start + models + demo
@@ -585,6 +704,29 @@ Something already listens on 25, 143, 587, 993, 3000, 8000, or 8080. Find and fr
 - Linux: `sudo ss -ltnp | grep ':8000'` then stop that process.
 - Windows: `netstat -ano | findstr :8000` then `taskkill /PID <pid> /F`.
 Or change the left-hand side of the port mapping in `docker-compose.yml` (e.g. `"18000:8000"`).
+
+**Dashboard shows a Vite overlay: `[plugin:vite:css] [postcss] It looks like you're trying to use \`tailwindcss\` directly as a PostCSS plugin`**
+Cause: Tailwind CSS **v4** moved its PostCSS plugin into a separate package. This repo is already
+fixed — `dashboard/postcss.config.js` uses `@tailwindcss/postcss`, `dashboard/src/index.css`
+starts with `@import "tailwindcss";`, and `@tailwindcss/postcss` is listed in
+`dashboard/package.json`. If you still see it, you are running an old dashboard image. Rebuild it:
+
+```bash
+# Linux
+docker compose build dashboard
+docker compose up -d dashboard
+```
+```powershell
+# Windows
+docker compose build dashboard
+docker compose up -d dashboard
+```
+
+Then hard-refresh the browser (`Ctrl+Shift+R`). If it persists, confirm the installed versions:
+
+```bash
+docker compose exec dashboard npm ls tailwindcss @tailwindcss/postcss
+```
 
 **`permission denied` running `./manage.py` (Linux)**
 Run it through Python (`python3 manage.py ...`) or `chmod +x manage.py`.

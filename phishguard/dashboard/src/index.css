@@ -1,6 +1,7 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* Keep using the JavaScript config (Tailwind v4 supports @config). */
+@config "../tailwind.config.js";
 
 /* Additional custom styles */
 body {
